@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+spec:
+  serviceName: "zookeeper-headless"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+    spec:
+      initContainers:
+        - name: set-myid
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              ordinal=$(echo "${HOSTNAME}" | awk -F'-' '{print $NF}')
+              myid=$((ordinal + 1))
+              echo "Setting myid=$myid"
+              echo "$myid" > /var/lib/zookeeper/data/myid
+              chown 1000:1000 /var/lib/zookeeper/data/myid
+          volumeMounts:
+            - name: datadir
+              mountPath: /var/lib/zookeeper/data
+      containers:
+        - name: zookeeper
+          image: confluentinc/cp-zookeeper:7.6.0
+          command:
+            - sh
+            - -c
+            - |
+              export ZOOKEEPER_SERVER_ID=$(cat /var/lib/zookeeper/data/myid)
+              exec /etc/confluent/docker/run
+          ports:
+            - containerPort: 2181
+              name: client
+            - containerPort: 2888
+              name: peer
+            - containerPort: 3888
+              name: leader-election
+          env:
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "2181"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"
+            - name: ZOOKEEPER_SYNC_LIMIT
+              value: "5"
+            - name: ZOOKEEPER_INIT_LIMIT
+              value: "5"
+            - name: ZOOKEEPER_SERVERS
+              value: "zookeeper-0.zookeeper-headless:2888:3888;zookeeper-1.zookeeper-headless:2888:3888;zookeeper-2.zookeeper-headless:2888:3888"
+            - name: ZOOKEEPER_DATA_DIR
+              value: "/var/lib/zookeeper/data"
+            - name: ZOOKEEPER_DATA_LOG_DIR
+              value: "/var/lib/zookeeper/data/log"
+          volumeMounts:
+            - name: datadir
+              mountPath: /var/lib/zookeeper/data
+      volumes:
+        - name: datadir
+          emptyDir: {}
+
