@@ -520,3 +520,12 @@ You've successfully completed these exercises when you can:
 You've completed a comprehensive hands-on learning experience with Kafka and Zookeeper on Kubernetes! This knowledge will serve you well in real-world scenarios.
 
 **Remember:** The best way to learn is by doing. Keep experimenting, breaking things, and fixing them. Every failure is a learning opportunity! 🚀
+
+---
+
+## 👨‍💻 Developer
+
+**Pradeep Kushwah**  
+📧 Email: kushwahpradeep531@gmail.com
+
+These lab exercises were designed to provide hands-on learning experience with Kafka and Zookeeper on Kubernetes.

@@ -431,3 +431,12 @@ You've successfully deployed a production-ready Kafka and Zookeeper cluster on K
 - Security best practices
 
 **Keep experimenting, breaking things, and fixing them - that's how you'll truly learn!** 🚀
+
+---
+
+## 👨‍💻 Developer
+
+**Pradeep Kushwah**  
+📧 Email: kushwahpradeep531@gmail.com
+
+This guide was created to help students learn Kafka and Zookeeper deployment on Kubernetes.
