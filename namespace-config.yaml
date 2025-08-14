@@ -1,0 +1,70 @@
+# =============================================================================
+# NAMESPACE CONFIGURATION FOR KAFKA & ZOOKEEPER
+# =============================================================================
+# This file configures the namespace with proper security standards
+# and labels for the Kafka and Zookeeper deployment.
+# 
+# IMPORTANT NOTES:
+# - Pod Security Standards replace deprecated Pod Security Policies
+# - Namespace labels enforce security standards
+# - Resource quotas can be added for production environments
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+  labels:
+    # Pod Security Standards - enforce security policies
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.28
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.28
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.28
+    # Application labels
+    app: kafka-zookeeper
+    environment: production
+---
+# Resource Quota for the namespace (optional - uncomment for production)
+# apiVersion: v1
+# kind: ResourceQuota
+# metadata:
+#   name: kafka-zookeeper-quota
+#   namespace: default
+# spec:
+#   hard:
+#     requests.cpu: "4"
+#     requests.memory: 8Gi
+#     limits.cpu: "8"
+#     limits.memory: 16Gi
+#     persistentvolumeclaims: "10"
+#     services: "10"
+#     services.loadbalancers: "2"
+#     services.nodeports: "5"
+---
+# Limit Range for the namespace (optional - uncomment for production)
+# apiVersion: v1
+# kind: LimitRange
+# metadata:
+#   name: kafka-zookeeper-limits
+#   namespace: default
+# spec:
+#   limits:
+#     - type: Container
+#       default:
+#         cpu: "500m"
+#         memory: "1Gi"
+#       defaultRequest:
+#         cpu: "100m"
+#         memory: "256Mi"
+#       min:
+#         cpu: "50m"
+#         memory: "64Mi"
+#       max:
+#         cpu: "2"
+#         memory: "4Gi"
+#     - type: Pod
+#       max:
+#         cpu: "4"
+#         memory: "8Gi"

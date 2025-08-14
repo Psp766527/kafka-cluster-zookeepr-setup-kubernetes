@@ -1,0 +1,128 @@
+# =============================================================================
+# MONITORING CONFIGURATION FOR KAFKA & ZOOKEEPER
+# =============================================================================
+# This file contains monitoring configurations for Kafka and Zookeeper
+# including Prometheus ServiceMonitors and Kafka Exporter.
+# 
+# IMPORTANT NOTES:
+# - Requires Prometheus Operator to be installed in the cluster
+# - Kafka Exporter provides additional metrics not available from Kafka directly
+# - ServiceMonitors automatically discover and scrape metrics
+# - Metrics are exposed on standard Prometheus endpoints (/metrics)
+# =============================================================================
+
+# Prometheus ServiceMonitor for Kafka brokers
+# Automatically discovers and scrapes Kafka metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-monitor
+  namespace: default
+  labels:
+    app: kafka
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: kafka
+  endpoints:
+    - port: internal  # Matches the port name in Kafka service
+      interval: 30s   # Scrape interval - adjust based on your needs
+      path: /metrics  # Standard Prometheus metrics endpoint
+---
+# Prometheus ServiceMonitor for Zookeeper ensemble
+# Automatically discovers and scrapes Zookeeper metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zookeeper-monitor
+  namespace: default
+  labels:
+    app: zookeeper
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: zookeeper
+  endpoints:
+    - port: client  # Matches the port name in Zookeeper service
+      interval: 30s # Scrape interval - adjust based on your needs
+      path: /metrics # Standard Prometheus metrics endpoint
+---
+# Kafka Exporter for additional metrics
+# Provides metrics that are not directly exposed by Kafka
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  namespace: default
+  labels:
+    app: kafka-exporter
+    component: monitoring
+spec:
+  replicas: 1  # Single instance is sufficient for metrics collection
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+        component: monitoring
+    spec:
+      serviceAccountName: kafka-exporter-sa  # Reference the service account
+      containers:
+        - name: kafka-exporter
+          image: danielqsj/kafka-exporter:latest
+          args:
+            # IMPORTANT: Update broker list if you change the number of brokers
+            - --kafka.server=kafka-0.kafka-headless:9092,kafka-1.kafka-headless:9092,kafka-2.kafka-headless:9092
+            - --web.listen-address=:9308  # Metrics endpoint port
+            - --web.telemetry-path=/metrics  # Standard Prometheus path
+          ports:
+            - containerPort: 9308
+              name: metrics
+          # Resource limits for monitoring component
+          resources:
+            requests:
+              memory: "128Mi"  # Minimum memory for metrics collection
+              cpu: "100m"      # Minimum CPU for metrics collection
+            limits:
+              memory: "256Mi"  # Maximum memory allowed
+              cpu: "200m"      # Maximum CPU allowed
+---
+# Service for Kafka Exporter
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  namespace: default
+  labels:
+    app: kafka-exporter
+    component: monitoring
+spec:
+  ports:
+    - port: 9308
+      name: metrics
+      targetPort: 9308
+  selector:
+    app: kafka-exporter
+---
+# ServiceMonitor for Kafka Exporter
+# Automatically discovers and scrapes Kafka Exporter metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-exporter-monitor
+  namespace: default
+  labels:
+    app: kafka-exporter
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  endpoints:
+    - port: metrics  # Matches the port name in Kafka Exporter service
+      interval: 30s  # Scrape interval - adjust based on your needs
+      path: /metrics # Standard Prometheus metrics endpoint

@@ -1,0 +1,220 @@
+# =============================================================================
+# SECURITY CONFIGURATION FOR KAFKA & ZOOKEEPER
+# =============================================================================
+# This file contains security configurations including network policies
+# and RBAC for production environments.
+# 
+# IMPORTANT NOTES:
+# - Network policies restrict inter-pod communication for security
+# - Service accounts provide minimal required permissions
+# - Pod security standards are enforced via namespace labels
+# - These policies follow the principle of least privilege
+# =============================================================================
+
+# Network Policy for Kafka brokers
+# Restricts network access to and from Kafka pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-network-policy
+  namespace: default
+  labels:
+    app: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka
+  policyTypes:
+    - Ingress  # Control incoming traffic
+    - Egress   # Control outgoing traffic
+  ingress:
+    # Allow Zookeeper to communicate with Kafka
+    - from:
+        - podSelector:
+            matchLabels:
+              app: zookeeper
+      ports:
+        - protocol: TCP
+          port: 9092  # Kafka internal port
+    # Allow Kafka Exporter to scrape metrics
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kafka-exporter
+      ports:
+        - protocol: TCP
+          port: 9092  # Kafka internal port
+    # Allow AKHQ (Kafka UI) to connect to Kafka
+    - from:
+        - podSelector:
+            matchLabels:
+              app: akhq
+      ports:
+        - protocol: TCP
+          port: 9092  # Kafka internal port
+    # Allow Prometheus to scrape metrics (if using Prometheus Operator)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring  # Adjust based on your Prometheus namespace
+        - podSelector:
+            matchLabels:
+              app: prometheus  # Adjust based on your Prometheus labels
+      ports:
+        - protocol: TCP
+          port: 9092  # Kafka internal port
+  egress:
+    # Allow Kafka to connect to Zookeeper
+    - to:
+        - podSelector:
+            matchLabels:
+              app: zookeeper
+      ports:
+        - protocol: TCP
+          port: 2181  # Zookeeper client port
+    # Allow DNS resolution for service discovery
+    - ports:
+        - protocol: TCP
+          port: 53   # DNS
+        - protocol: UDP
+          port: 53   # DNS
+---
+# Network Policy for Zookeeper ensemble
+# Restricts network access to and from Zookeeper pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zookeeper-network-policy
+  namespace: default
+  labels:
+    app: zookeeper
+spec:
+  podSelector:
+    matchLabels:
+      app: zookeeper
+  policyTypes:
+    - Ingress  # Control incoming traffic
+    - Egress   # Control outgoing traffic
+  ingress:
+    # Allow Kafka to connect to Zookeeper
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - protocol: TCP
+          port: 2181  # Zookeeper client port
+    # Allow Zookeeper ensemble communication
+    - from:
+        - podSelector:
+            matchLabels:
+              app: zookeeper
+      ports:
+        - protocol: TCP
+          port: 2888  # Zookeeper peer communication
+        - protocol: TCP
+          port: 3888  # Zookeeper leader election
+    # Allow Prometheus to scrape metrics (if using Prometheus Operator)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring  # Adjust based on your Prometheus namespace
+        - podSelector:
+            matchLabels:
+              app: prometheus  # Adjust based on your Prometheus labels
+      ports:
+        - protocol: TCP
+          port: 2181  # Zookeeper client port
+  egress:
+    # Allow Zookeeper ensemble communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: zookeeper
+      ports:
+        - protocol: TCP
+          port: 2888  # Zookeeper peer communication
+        - protocol: TCP
+          port: 3888  # Zookeeper leader election
+    # Allow DNS resolution for service discovery
+    - ports:
+        - protocol: TCP
+          port: 53   # DNS
+        - protocol: UDP
+          port: 53   # DNS
+---
+# Network Policy for AKHQ management UI
+# Restricts network access to AKHQ
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: akhq-network-policy
+  namespace: default
+  labels:
+    app: akhq
+spec:
+  podSelector:
+    matchLabels:
+      app: akhq
+  policyTypes:
+    - Ingress  # Control incoming traffic
+    - Egress   # Control outgoing traffic
+  ingress:
+    # Allow external access to AKHQ UI
+    - ports:
+        - protocol: TCP
+          port: 8080  # AKHQ web interface
+  egress:
+    # Allow AKHQ to connect to Kafka
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - protocol: TCP
+          port: 9092  # Kafka internal port
+    # Allow DNS resolution for service discovery
+    - ports:
+        - protocol: TCP
+          port: 53   # DNS
+        - protocol: UDP
+          port: 53   # DNS
+---
+# RBAC (Role-Based Access Control) for Kafka and Zookeeper
+# Service accounts with minimal required permissions
+
+# Service account for Kafka brokers
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kafka-sa
+  namespace: default
+  labels:
+    app: kafka
+---
+# Service account for Zookeeper ensemble
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: zookeeper-sa
+  namespace: default
+  labels:
+    app: zookeeper
+---
+# Service account for AKHQ management UI
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: akhq-sa
+  namespace: default
+  labels:
+    app: akhq
+---
+# Service account for Kafka Exporter
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kafka-exporter-sa
+  namespace: default
+  labels:
+    app: kafka-exporter

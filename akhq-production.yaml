@@ -1,0 +1,132 @@
+# =============================================================================
+# AKHQ PRODUCTION CONFIGURATION
+# =============================================================================
+# This file contains a production-ready AKHQ configuration for Kafka management.
+# AKHQ provides a web UI for managing Kafka topics, consumers, and producers.
+# 
+# IMPORTANT NOTES:
+# - AKHQ connects to Kafka for management operations
+# - Configure authentication and security for production use
+# - Resource limits prevent resource exhaustion
+# - Health checks ensure service availability
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: akhq-service
+  namespace: default
+  labels:
+    app: akhq
+    component: management
+spec:
+  type: LoadBalancer  # IMPORTANT: Use NodePort for on-premise clusters
+  ports:
+    - port: 8080
+      name: http
+      targetPort: 8080
+      nodePort: 30080  # Fixed node port for external access
+  selector:
+    app: akhq
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akhq
+  namespace: default
+  labels:
+    app: akhq
+    component: management
+spec:
+  replicas: 1  # Single instance is sufficient for management UI
+  selector:
+    matchLabels:
+      app: akhq
+  template:
+    metadata:
+      labels:
+        app: akhq
+        component: management
+    spec:
+      serviceAccountName: akhq-sa  # Reference the service account
+      # Security context - run as non-root user
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: akhq
+          image: tchiotludo/akhq:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            # AKHQ configuration
+            - name: AKHQ_CONFIGURATION
+              value: |
+                akhq:
+                  server:
+                    servlet:
+                      context-path: /
+                    # Security configuration
+                    access-log:
+                      name: org.akhq.log.access
+                      format: "%h %l %u %t \"%r\" %s %b \"%{Referer}i\" \"%{User-Agent}i\" %D"
+                  # Authentication configuration (uncomment for production)
+                  # auth:
+                  #   basic-auth:
+                  #     - username: admin
+                  #       password: "{{ password }}"
+                  #       groups: [admin]
+                  #   groups:
+                  #     admin:
+                  #       name: admin
+                  #       roles: [topic/read, topic/write, consumer-group/read, consumer-group/write, acls/read, acls/write, schema/read, schema/write, connect/read, connect/write]
+                  connections:
+                    kafka-cluster:
+                      properties:
+                        bootstrap.servers: "kafka-0.kafka-headless:9092,kafka-1.kafka-headless:9092,kafka-2.kafka-headless:9092"
+                        # IMPORTANT: Add security configuration for production
+                        # security.protocol: SSL
+                        # sasl.mechanism: SCRAM-SHA-256
+                        # sasl.jaas.config: org.apache.kafka.common.security.scram.ScramLoginModule required username="admin" password="password";
+                        # SSL configuration (uncomment for production)
+                        # ssl.truststore.location: /etc/ssl/certs/kafka.truststore.jks
+                        # ssl.truststore.password: "{{ truststore_password }}"
+                        # ssl.keystore.location: /etc/ssl/certs/kafka.keystore.jks
+                        # ssl.keystore.password: "{{ keystore_password }}"
+                        # ssl.key.password: "{{ key_password }}"
+          # Resource limits prevent resource exhaustion
+          resources:
+            requests:
+              memory: "256Mi"  # Minimum memory required
+              cpu: "100m"      # Minimum CPU required
+            limits:
+              memory: "512Mi"  # Maximum memory allowed
+              cpu: "200m"      # Maximum CPU allowed
+          # Health checks ensure service is working correctly
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Security context - restrict container capabilities
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL  # Drop all Linux capabilities

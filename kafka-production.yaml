@@ -1,0 +1,240 @@
+# =============================================================================
+# KAFKA PRODUCTION CONFIGURATION
+# =============================================================================
+# This file contains a production-ready Kafka cluster configuration
+# with 3 brokers for high availability, persistent storage, and security.
+# 
+# IMPORTANT NOTES:
+# - Kafka requires Zookeeper to be running first
+# - Each broker needs a unique broker ID (0, 1, 2)
+# - Dual listeners: INTERNAL (9092) for cluster communication, EXTERNAL (9093) for clients
+# - Replication factor should match broker count for high availability
+# - Persistent storage is critical for data durability
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: default
+  labels:
+    app: kafka
+    component: kafka
+spec:
+  ports:
+    - port: 9092
+      name: internal
+      targetPort: 9092
+      # Internal port - for inter-broker communication
+  clusterIP: None  # Headless service for StatefulSet DNS resolution
+  selector:
+    app: kafka
+---
+# External service for client access
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-service
+  namespace: default
+  labels:
+    app: kafka
+    component: kafka
+spec:
+  type: LoadBalancer  # IMPORTANT: Use NodePort for on-premise clusters
+  ports:
+    - port: 9093
+      name: external
+      targetPort: 9093
+      nodePort: 30093  # Fixed node port for external access
+  selector:
+    app: kafka
+---
+# Pod Disruption Budget ensures high availability during maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka-pdb
+  namespace: default
+spec:
+  minAvailable: 2  # At least 2 out of 3 brokers must be available
+  selector:
+    matchLabels:
+      app: kafka
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: default
+  labels:
+    app: kafka
+    component: kafka
+spec:
+  serviceName: kafka-headless  # Required for StatefulSet DNS
+  replicas: 3  # IMPORTANT: Should match replication factor
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+        component: kafka
+    spec:
+      serviceAccountName: kafka-sa  # Reference the service account
+      # Security context - run as non-root user
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      initContainers:
+        - name: wait-for-zookeeper
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Zookeeper ensemble to be ready..."
+              # Wait for all Zookeeper nodes to be available
+              for i in 0 1 2; do
+                echo "Checking zookeeper-${i}.zookeeper-headless:2181..."
+                until nc -z zookeeper-${i}.zookeeper-headless 2181; do
+                  echo "Still waiting for zookeeper-${i}..."
+                  sleep 5
+                done
+                echo "zookeeper-${i} is ready"
+              done
+              echo "All ZooKeeper nodes are reachable!"
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.6.0
+          ports:
+            - containerPort: 9092
+              name: internal
+              # Internal port for inter-broker communication
+            - containerPort: 9093
+              name: external
+              # External port for client connections
+          env:
+            # Pod information for dynamic configuration
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # JVM heap settings - adjust based on available memory
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx1g -Xms1g"  # 1GB heap, adjust for your workload
+            # Zookeeper connection string
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper-0.zookeeper-headless:2181,zookeeper-1.zookeeper-headless:2181,zookeeper-2.zookeeper-headless:2181"
+            # Security protocol mapping
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"  # IMPORTANT: Use SSL in production
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "INTERNAL"  # Use internal listener for inter-broker communication
+            - name: KAFKA_LISTENERS
+              value: "INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093"
+            # Replication and availability settings
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "3"  # IMPORTANT: Should match broker count
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "3"  # IMPORTANT: Should match broker count
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "2"  # Minimum in-sync replicas
+            # Data storage configuration
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data"
+            # Log retention settings
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "168"  # 7 days - adjust based on your requirements
+            - name: KAFKA_LOG_RETENTION_BYTES
+              value: "1073741824"  # 1GB per partition - adjust based on storage
+            - name: KAFKA_LOG_SEGMENT_BYTES
+              value: "1073741824"  # 1GB segment size
+            - name: KAFKA_LOG_CLEANUP_POLICY
+              value: "delete"  # Cleanup policy: delete or compact
+            # Topic defaults
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "3"  # IMPORTANT: Should match broker count
+            - name: KAFKA_MIN_INSYNC_REPLICAS
+              value: "2"  # Minimum replicas that must be in sync
+            - name: KAFKA_NUM_PARTITIONS
+              value: "3"  # Default number of partitions for new topics
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"  # IMPORTANT: Disable auto topic creation in production
+            - name: KAFKA_DELETE_TOPIC_ENABLE
+              value: "true"  # Allow topic deletion
+            # Performance tuning
+            - name: KAFKA_LOG_FLUSH_INTERVAL_MESSAGES
+              value: "10000"  # Flush after 10k messages
+            - name: KAFKA_LOG_FLUSH_INTERVAL_MS
+              value: "1000"   # Flush every 1 second
+          command:
+            - sh
+            - -c
+            - |
+              # Extract broker ID from pod name (kafka-0 -> 0, kafka-1 -> 1, etc.)
+              export KAFKA_BROKER_ID=$(echo ${POD_NAME} | awk -F'-' '{print $NF}')
+              # Configure advertised listeners for client connectivity
+              export KAFKA_ADVERTISED_LISTENERS="INTERNAL://${POD_NAME}.kafka-headless.default.svc.cluster.local:9092,EXTERNAL://${POD_IP}:9093"
+              echo "Starting Kafka broker ID: $KAFKA_BROKER_ID"
+              echo "Advertised listeners: $KAFKA_ADVERTISED_LISTENERS"
+              exec /etc/confluent/docker/run
+          # Resource limits prevent resource exhaustion
+          resources:
+            requests:
+              memory: "1Gi"   # Minimum memory required
+              cpu: "500m"     # Minimum CPU required
+            limits:
+              memory: "2Gi"   # Maximum memory allowed
+              cpu: "1000m"    # Maximum CPU allowed
+          # Health checks ensure broker is working correctly
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-broker-api-versions --bootstrap-server localhost:9092"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-broker-api-versions --bootstrap-server localhost:9092"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+          # Security context - restrict container capabilities
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Kafka needs to write to data directory
+            capabilities:
+              drop:
+                - ALL  # Drop all Linux capabilities
+  # Persistent volume claims for data durability
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]  # Single node access
+        storageClassName: "standard"    # IMPORTANT: Adjust based on your cluster
+        resources:
+          requests:
+            storage: 20Gi  # IMPORTANT: Adjust based on your data volume needs

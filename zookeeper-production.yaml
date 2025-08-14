@@ -1,0 +1,207 @@
+# =============================================================================
+# ZOOKEEPER PRODUCTION CONFIGURATION
+# =============================================================================
+# This file contains a production-ready Zookeeper ensemble configuration
+# with 3 nodes for high availability, persistent storage, and security.
+# 
+# IMPORTANT NOTES:
+# - Zookeeper requires an odd number of nodes for quorum (3, 5, 7, etc.)
+# - Each node needs a unique myid file (1, 2, 3)
+# - Persistent storage is critical for data durability
+# - Security contexts prevent running as root
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-headless
+  namespace: default
+  labels:
+    app: zookeeper
+    component: zookeeper
+spec:
+  ports:
+    - port: 2181
+      name: client
+      targetPort: 2181
+      # Client port - used by Kafka and other clients
+    - port: 2888
+      name: peer
+      targetPort: 2888
+      # Peer communication port - for Zookeeper ensemble members
+    - port: 3888
+      name: leader-election
+      targetPort: 3888
+      # Leader election port - for Zookeeper leader election
+  clusterIP: None  # Headless service for StatefulSet DNS resolution
+  selector:
+    app: zookeeper
+---
+# External service for client access (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-service
+  namespace: default
+  labels:
+    app: zookeeper
+    component: zookeeper
+spec:
+  ports:
+    - port: 2181
+      name: client
+      targetPort: 2181
+  selector:
+    app: zookeeper
+---
+# Pod Disruption Budget ensures high availability during maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zookeeper-pdb
+  namespace: default
+spec:
+  minAvailable: 2  # At least 2 out of 3 pods must be available
+  selector:
+    matchLabels:
+      app: zookeeper
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+  namespace: default
+  labels:
+    app: zookeeper
+    component: zookeeper
+spec:
+  serviceName: zookeeper-headless  # Required for StatefulSet DNS
+  replicas: 3  # IMPORTANT: Must be odd number for quorum
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+        component: zookeeper
+    spec:
+      serviceAccountName: zookeeper-sa  # Reference the service account
+      # Security context - run as non-root user
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      initContainers:
+        - name: set-myid
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Extract ordinal from pod name (zookeeper-0 -> 0, zookeeper-1 -> 1, etc.)
+              ordinal=$(echo "${HOSTNAME}" | awk -F'-' '{print $NF}')
+              # Zookeeper myid starts from 1, not 0
+              myid=$((ordinal + 1))
+              echo "Setting myid=$myid for pod ${HOSTNAME}"
+              echo "$myid" > /var/lib/zookeeper/data/myid
+              chown 1000:1000 /var/lib/zookeeper/data/myid
+              chmod 644 /var/lib/zookeeper/data/myid
+          volumeMounts:
+            - name: zookeeper-data
+              mountPath: /var/lib/zookeeper/data
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+      containers:
+        - name: zookeeper
+          image: confluentinc/cp-zookeeper:7.6.0
+          command:
+            - sh
+            - -c
+            - |
+              # Read the myid file set by init container
+              export ZOOKEEPER_SERVER_ID=$(cat /var/lib/zookeeper/data/myid)
+              echo "Starting Zookeeper with server ID: $ZOOKEEPER_SERVER_ID"
+              exec /etc/confluent/docker/run
+          ports:
+            - containerPort: 2181
+              name: client
+            - containerPort: 2888
+              name: peer
+            - containerPort: 3888
+              name: leader-election
+          env:
+            # Core Zookeeper configuration
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "2181"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"  # 2 seconds - basic time unit in Zookeeper
+            - name: ZOOKEEPER_SYNC_LIMIT
+              value: "5"     # How many ticks can pass before sync
+            - name: ZOOKEEPER_INIT_LIMIT
+              value: "10"    # How many ticks can pass before init
+            - name: ZOOKEEPER_MAX_CLIENT_CNXNS
+              value: "60"    # Maximum number of client connections
+            # Ensemble configuration - all Zookeeper servers
+            - name: ZOOKEEPER_SERVERS
+              value: "zookeeper-0.zookeeper-headless:2888:3888;zookeeper-1.zookeeper-headless:2888:3888;zookeeper-2.zookeeper-headless:2888:3888"
+            # Data directories
+            - name: ZOOKEEPER_DATA_DIR
+              value: "/var/lib/zookeeper/data"
+            - name: ZOOKEEPER_DATA_LOG_DIR
+              value: "/var/lib/zookeeper/data/log"
+            - name: ZOOKEEPER_LOG_LEVEL
+              value: "INFO"
+          # Resource limits prevent resource exhaustion
+          resources:
+            requests:
+              memory: "512Mi"   # Minimum memory required
+              cpu: "250m"       # Minimum CPU required
+            limits:
+              memory: "1Gi"     # Maximum memory allowed
+              cpu: "500m"       # Maximum CPU allowed
+          # Health checks ensure pod is working correctly
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "echo ruok | nc localhost 2181"  # Zookeeper health check command
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "echo ruok | nc localhost 2181"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: zookeeper-data
+              mountPath: /var/lib/zookeeper/data
+          # Security context - restrict container capabilities
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Zookeeper needs to write to data directory
+            capabilities:
+              drop:
+                - ALL  # Drop all Linux capabilities
+  # Persistent volume claims for data durability
+  volumeClaimTemplates:
+    - metadata:
+        name: zookeeper-data
+      spec:
+        accessModes: ["ReadWriteOnce"]  # Single node access
+        storageClassName: "standard"    # IMPORTANT: Adjust based on your cluster
+        resources:
+          requests:
+            storage: 10Gi  # IMPORTANT: Adjust based on your data volume needs
